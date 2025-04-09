@@ -14,32 +14,20 @@
     ],
     "main": "./dist/extension.js",
     "contributes": {
-        "commands": [
-            {
-                "command": "extension.showHierarchy",
-                "title": "Show Type Hierarchy 2"
-            },
-            {
-                "command": "typeHierarchy.expandAllSupers",
-                "title": "Expand All Supertypes"
-            },
-            {
-                "command": "typeHierarchy.expandAllSubs",
-                "title": "Expand All Subtypes"
-            }
-        ],
         "views": {
             "explorer": [
                 {
-                    "id": "typeHierarchySupertypes",
-                    "name": "Type Hierarchy (Supertypes)"
-                },
-                {
-                    "id": "typeHierarchySubtypes",
-                    "name": "Type Hierarchy (Subtypes)"
+                    "id": "classHierarchy",
+                    "name": "Class Hierarchy"
                 }
             ]
-        }
+        },
+        "commands": [
+            {
+                "command": "classHierarchy.showHierarchy",
+                "title": "Show Class Hierarchy"
+            }
+        ]
     },
     "scripts": {
         "vscode:prepublish": "tsc"

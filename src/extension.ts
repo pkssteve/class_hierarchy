@@ -1,90 +1,72 @@
 // type_hierarchy_extension/src/extension.ts
 import * as vscode from 'vscode';
-import { LanguageClient ,
-    LanguageClientOptions,
-    ServerOptions,
-    TransportKind
-} from 'vscode-languageclient/node';
-import * as path from 'path';
 import type { ClangdExtension } from '@clangd/vscode-clangd';
+import type { TypeHierarchyItem } from 'vscode-languageclient';
 
 const CLANGD_EXTENSION = 'llvm-vs-code-extensions.vscode-clangd';
 const CLANGD_API_VERSION = 1;
-
-let languageClient: LanguageClient;
+let languageClient: any;
 
 export async function activate(context: vscode.ExtensionContext) {
-    // Assume languageClient is initialized and assigned elsewhere, or get it from an extension API
-    
+    const clangdExtension = vscode.extensions.getExtension<ClangdExtension>(CLANGD_EXTENSION);
+    if (clangdExtension) {
+        const api = (await clangdExtension.activate()).getApi(CLANGD_API_VERSION);
+        if (!api.languageClient) {
+            vscode.window.showErrorMessage('Clangd language client not found.');
+            return;
+        }
+        languageClient = api.languageClient;
+    }
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('extension.showHierarchy', async () => {
+        vscode.commands.registerCommand('classHierarchy.showHierarchy', async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
                 vscode.window.showErrorMessage('No active editor found');
                 return;
             }
-            const api = await getClangdAPI();
-            if (!api?.languageClient) {
-                vscode.window.showErrorMessage('Failed to load Clangd extension API');
-                return;
-            }
 
-            const textDocument = api.languageClient.code2ProtocolConverter.asTextDocumentIdentifier(editor.document);
+            const textDocument = languageClient.code2ProtocolConverter.asTextDocumentIdentifier(editor.document);
             const position = editor.selection.active;
-            const params = {textDocument, position, resolve: 5, direction: 2 };
+            const params = { textDocument, position, resolve: 5, direction: 2 };
 
-            const item = await api.languageClient.sendRequest('textDocument/typeHierarchy', params);
+            
+
+            const item: TypeHierarchyItem = await languageClient.sendRequest('textDocument/typeHierarchy', params);
 
             if (!item) {
                 vscode.window.showInformationMessage('No type hierarchy available');
                 return;
             }
 
-            showHierarchyView('Supertypes', item, 'typeHierarchy.expandAllSupers', 'typeHierarchySupertypes', true);
-            showHierarchyView('Subtypes', item, 'typeHierarchy.expandAllSubs', 'typeHierarchySubtypes', false);
-        })
-    );
+            const rootItem = item;
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('typeHierarchy.expandAllSupers', () => {
-            vscode.commands.executeCommand('workbench.actions.treeView.typeHierarchySupertypes.expandAll');
-        })
-    );
+            const treeDataProvider = new UnifiedTypeHierarchyProvider(rootItem);
+            const treeView = vscode.window.createTreeView('classHierarchy', {
+                treeDataProvider,
+                showCollapseAll: true
+            });
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('typeHierarchy.expandAllSubs', () => {
-            vscode.commands.executeCommand('workbench.actions.treeView.typeHierarchySubtypes.expandAll');
+            const rootNode = new TypeItem(rootItem, 'root');
+            treeView.reveal(rootNode, { expand: true, focus: true, select: true });
+
+            const panel = vscode.window.createWebviewPanel(
+                'umlDiagram',
+                'Class Hierarchy UML Diagram',
+                vscode.ViewColumn.Beside,
+                { enableScripts: true }
+            );
+            const mermaidText = await buildMermaidDiagram(rootItem);
+            panel.webview.html = renderMermaidWebview(mermaidText);
         })
     );
 }
 
-function showHierarchyView(
-    title: string,
-    rootItem: any,
-    expandCmd: string,
-    viewId: string,
-    isSuper: boolean
-) {
-    const treeDataProvider = new TypeHierarchyProvider(rootItem, isSuper);
-    const view = vscode.window.createTreeView(viewId, {
-        treeDataProvider,
-        showCollapseAll: true
-    });
+class UnifiedTypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
+    private _onDidChangeTreeData: vscode.EventEmitter<TypeItem | undefined | void> = new vscode.EventEmitter<TypeItem | undefined | void>();
+    readonly onDidChangeTreeData: vscode.Event<TypeItem | undefined | void> = this._onDidChangeTreeData.event;
 
-    vscode.commands.executeCommand('setContext', `${viewId}Available`, true);
-
-    const button = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
-    button.text = `Expand All ${title}`;
-    button.command = expandCmd;
-    button.show();
-}
-
-class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
-    constructor(
-        private rootItem: any,
-        private isSuper: boolean
-    ) {}
+    constructor(private rootItem: TypeHierarchyItem) {}
 
     getTreeItem(element: TypeItem): vscode.TreeItem {
         return element;
@@ -92,68 +74,103 @@ class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
 
     async getChildren(element?: TypeItem): Promise<TypeItem[]> {
         if (!element) {
-            return [new TypeItem(this.rootItem, this.isSuper)];
+            return [new TypeItem(this.rootItem, 'root')];
         }
 
-        const method = this.isSuper ? 'typeHierarchy/supertypes' : 'typeHierarchy/subtypes';
-        const api = await getClangdAPI();
-        if (!api) {
-            vscode.window.showErrorMessage('Failed to load Clangd API during hierarchy resolution');
-            return [];
-        }
+        const seen = new Set<string>();
+        return await this.fetchHierarchyItems(element.item, seen);
+    }
 
-        const children = await api.languageClient.sendRequest(method, { item: element.item });
-        return (children || []).map((item: any) => new TypeItem(item, this.isSuper));
+    private async fetchHierarchyItems(item: TypeHierarchyItem, seen: Set<string>): Promise<TypeItem[]> {
+        const name = item?.name ?? '<unknown>';
+        if (seen.has(name)) return [];
+        seen.add(name);
+
+        const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item }) as TypeHierarchyItem[] | null;
+        const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item }) as TypeHierarchyItem[] | null;
+
+
+        const superItems = (supertypes || []).map((entry: any) => new TypeItem(entry, 'super'));
+        const subItems = (subtypes || []).map((entry: any) => new TypeItem(entry, 'sub'));
+
+        return [...superItems, ...subItems];
     }
 }
 
 class TypeItem extends vscode.TreeItem {
     constructor(
-        public item: any,
-        private isSuper: boolean
+        public item: TypeHierarchyItem,
+        private role: 'super' | 'sub' | 'root'
     ) {
-        super(item.name, vscode.TreeItemCollapsibleState.Collapsed);
-        this.description = item.detail || '';
-    }
-}
-
-async function getClangdAPI(): Promise<any | undefined> {
-    const clangdExtension = vscode.extensions.getExtension<ClangdExtension>(CLANGD_EXTENSION);
-    let api = undefined;
-    if (clangdExtension) {
-        api = (await clangdExtension.activate()).getApi(CLANGD_API_VERSION);
-        return api;
-    }
-    return api;
-}
-
-
-// Language Client 시작 함수
-function startLanguageClient(context: vscode.ExtensionContext) {
-    // 언어 서버 모듈의 경로 (이 예제는 'server/out/server.js'에 서버 구현이 있다고 가정)
-    let serverModule = context.asAbsolutePath(path.join('server', 'out', 'server.js'));
-    let debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
-
-    let serverOptions: ServerOptions = {
-        run: { module: serverModule, transport: TransportKind.ipc },
-        debug: { module: serverModule, transport: TransportKind.ipc, options: debugOptions }
-    };
-
-    let clientOptions: LanguageClientOptions = {
-        // 필요에 따라 지원 언어(예: 'java', 'typescript')를 지정
-        documentSelector: [{ scheme: 'file', language: 'java' }, { scheme: 'file', language: 'typescript' }],
-        synchronize: {
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/.clientrc')
+        const name = item?.name ?? '<unknown>';
+        super(name, vscode.TreeItemCollapsibleState.Expanded);
+        this.description = item?.detail || '';
+        this.tooltip = `${roleLabel(role)}: ${name}`;
+        if (item?.uri && item?.range) {
+            this.command = {
+                command: 'vscode.open',
+                title: 'Go to Definition',
+                arguments: [
+                    vscode.Uri.parse(item.uri),
+                    {
+                        selection: new vscode.Range(
+                            new vscode.Position(item.range.start.line, item.range.start.character),
+                            new vscode.Position(item.range.end.line, item.range.end.character)
+                        )
+                    }
+                ]
+            };
         }
-    };
+    }
+}
 
-    languageClient = new LanguageClient(
-        'typeHierarchyLanguageServer',
-        'Type Hierarchy Language Server',
-        serverOptions,
-        clientOptions
-    );
-    languageClient.start();
+function roleLabel(role: string): string {
+    switch (role) {
+        case 'super': return 'Supertype';
+        case 'sub': return 'Subtype';
+        case 'root': return 'Root';
+        default: return '';
+    }
+}
+
+async function buildMermaidDiagram(rootItem: TypeHierarchyItem, seen = new Set<string>()): Promise<string> {
+    const rootName = rootItem?.name ?? '<unknown>';
+    if (rootItem==undefined) return '';
+    if (seen.has(rootName)) return '';
+    seen.add(rootName);
+
+    let lines: string[] = [];
+    const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item : rootItem }) as TypeHierarchyItem[] | null;
+    for (const supertype of supertypes || []) {
+        const superName = supertype?.name ?? '<unknown>';
+        lines.push(`${superName} <|-- ${rootName}`);
+        lines.push(await buildMermaidDiagram(supertype, seen));
+    }
+
+    const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item : rootItem }) as TypeHierarchyItem[] | null;
+    for (const subtype of subtypes || []) {
+        const subName = subtype?.name ?? '<unknown>';
+        lines.push(`${rootName} <|-- ${subName}`);
+        lines.push(await buildMermaidDiagram(subtype, seen));
+    }
+
+    return lines.join('\n');
+}
+
+function renderMermaidWebview(mermaidText: string): string {
+    return `
+        <html>
+        <body>
+            <script type="module">
+                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+                mermaid.initialize({ startOnLoad: true });
+            </script>
+            <div class="mermaid">
+                classDiagram\n${mermaidText}
+            </div>
+        </body>
+        </html>
+    `;
 }
 
 export function deactivate() {}
