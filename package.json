@@ -1,0 +1,57 @@
+{
+    "name": "type-hierarchy-extension",
+    "displayName": "Type Hierarchy Extension",
+    "description": "Enhanced Type Hierarchy viewer for C++ using VS Code's language features",
+    "version": "1.0.0",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onLanguage:cpp"
+    ],
+    "main": "./dist/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "extension.showHierarchy",
+                "title": "Show Type Hierarchy 2"
+            },
+            {
+                "command": "typeHierarchy.expandAllSupers",
+                "title": "Expand All Supertypes"
+            },
+            {
+                "command": "typeHierarchy.expandAllSubs",
+                "title": "Expand All Subtypes"
+            }
+        ],
+        "views": {
+            "explorer": [
+                {
+                    "id": "typeHierarchySupertypes",
+                    "name": "Type Hierarchy (Supertypes)"
+                },
+                {
+                    "id": "typeHierarchySubtypes",
+                    "name": "Type Hierarchy (Subtypes)"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "tsc"
+    },
+    "devDependencies": {
+        "@types/node": "^22.14.0",
+        "@types/vscode": "^1.80.0",
+        "typescript": "^5.0.0",
+        "vsce": "^2.15.0"
+    },
+    "dependencies": {
+        "@clangd/vscode-clangd": "^0.0.0",
+        "vscode-languageclient": "^9.0.1"
+    }
+}
