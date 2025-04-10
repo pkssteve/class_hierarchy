@@ -1,12 +1,34 @@
 // type_hierarchy_extension/src/extension.ts
 import * as vscode from 'vscode';
 import type { ClangdExtension } from '@clangd/vscode-clangd';
-import type { TypeHierarchyItem } from 'vscode-languageclient';
+import * as vscodelc from 'vscode-languageclient/node';
 
 const CLANGD_EXTENSION = 'llvm-vs-code-extensions.vscode-clangd';
 const CLANGD_API_VERSION = 1;
 let languageClient: any;
-
+declare global {
+    var umlPanel: vscode.WebviewPanel | undefined;
+}
+interface TypeHierarchyItem {
+    name: string;
+    detail?: string;
+    kind: vscodelc.SymbolKind;
+    deprecated?: boolean;
+    uri: string;
+    range: vscodelc.Range;
+    selectionRange: vscodelc.Range;
+    parents?: TypeHierarchyItem[];
+    children?: TypeHierarchyItem[];
+    data?: any;
+}
+function findRoot(node: TypeHierarchyItem): TypeHierarchyItem {
+    let current = node;
+    while (current.parents && current.parents.length > 0) {
+        // 여기선 첫 번째 부모만 따라감 (복수 부모가 있는 경우 커스터마이징 가능)
+        current = current.parents[0];
+    }
+    return current;
+}
 export async function activate(context: vscode.ExtensionContext) {
     const clangdExtension = vscode.extensions.getExtension<ClangdExtension>(CLANGD_EXTENSION);
     if (clangdExtension) {
@@ -30,7 +52,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const position = editor.selection.active;
             const params = { textDocument, position, resolve: 5, direction: 2 };
 
-            
+
 
             const item: TypeHierarchyItem = await languageClient.sendRequest('textDocument/typeHierarchy', params);
 
@@ -41,23 +63,34 @@ export async function activate(context: vscode.ExtensionContext) {
 
             const rootItem = item;
 
-            const treeDataProvider = new UnifiedTypeHierarchyProvider(rootItem);
+            const treeDataProvider = new TypeHierarchyProvider(findRoot(rootItem), false);
             const treeView = vscode.window.createTreeView('classHierarchy', {
                 treeDataProvider,
                 showCollapseAll: true
             });
 
-            const rootNode = new TypeItem(rootItem, 'root');
-            treeView.reveal(rootNode, { expand: true, focus: true, select: true });
+            const children = await treeDataProvider.getChildren();
+            const rootNode = children.find(item => item.item.name === rootItem.name);
+            if (rootNode) {
+                treeView.reveal(rootNode, { expand: true, focus: true, select: true });
+            }
+            if (!globalThis.umlPanel) {
+                globalThis.umlPanel = vscode.window.createWebviewPanel(
+                    'umlDiagram',
+                    'Class Hierarchy UML Diagram',
+                    vscode.ViewColumn.Beside,
+                    { enableScripts: true }
+                );
+                globalThis.umlPanel.onDidDispose(() => {
+                    globalThis.umlPanel = undefined;
+                }, null, context.subscriptions);
+            } else {
+                globalThis.umlPanel.reveal(vscode.ViewColumn.Beside);
+            }
 
-            const panel = vscode.window.createWebviewPanel(
-                'umlDiagram',
-                'Class Hierarchy UML Diagram',
-                vscode.ViewColumn.Beside,
-                { enableScripts: true }
-            );
-            const mermaidText = await buildMermaidDiagram(rootItem);
-            panel.webview.html = renderMermaidWebview(mermaidText);
+            const mermaidText = await buildMermaidDiagram(rootItem, new Set(), rootItem.name);
+            globalThis.umlPanel.webview.html = renderMermaidWebview(mermaidText, rootItem.name);
+            // showHierarchyView('Subtypes', findRoot(item), 'typeHierarchy.expandAllSubs', 'classHierarchyText', true);
         })
     );
 }
@@ -66,17 +99,17 @@ class UnifiedTypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> 
     private _onDidChangeTreeData: vscode.EventEmitter<TypeItem | undefined | void> = new vscode.EventEmitter<TypeItem | undefined | void>();
     readonly onDidChangeTreeData: vscode.Event<TypeItem | undefined | void> = this._onDidChangeTreeData.event;
 
-    constructor(private rootItem: TypeHierarchyItem) {}
+    constructor(private rootItem: TypeHierarchyItem) { }
 
     getTreeItem(element: TypeItem): vscode.TreeItem {
         return element;
     }
 
+
     async getChildren(element?: TypeItem): Promise<TypeItem[]> {
         if (!element) {
             return [new TypeItem(this.rootItem, 'root')];
         }
-
         const seen = new Set<string>();
         return await this.fetchHierarchyItems(element.item, seen);
     }
@@ -106,6 +139,13 @@ class TypeItem extends vscode.TreeItem {
         super(name, vscode.TreeItemCollapsibleState.Expanded);
         this.description = item?.detail || '';
         this.tooltip = `${roleLabel(role)}: ${name}`;
+
+        const iconMap = {
+            root: 'symbol-class.svg',
+            super: 'arrow-up.svg',
+            sub: 'arrow-down.svg'
+        };
+        this.iconPath = new vscode.ThemeIcon(iconMap[role] || 'symbol-class');
         if (item?.uri && item?.range) {
             this.command = {
                 command: 'vscode.open',
@@ -132,45 +172,141 @@ function roleLabel(role: string): string {
         default: return '';
     }
 }
-
-async function buildMermaidDiagram(rootItem: TypeHierarchyItem, seen = new Set<string>()): Promise<string> {
-    const rootName = rootItem?.name ?? '<unknown>';
-    if (rootItem==undefined) return '';
-    if (seen.has(rootName)) return '';
-    seen.add(rootName);
-
-    let lines: string[] = [];
-    const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item : rootItem }) as TypeHierarchyItem[] | null;
-    for (const supertype of supertypes || []) {
-        const superName = supertype?.name ?? '<unknown>';
-        lines.push(`${superName} <|-- ${rootName}`);
-        lines.push(await buildMermaidDiagram(supertype, seen));
+class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
+    constructor(
+        private rootItem: any,
+        private isSuper: boolean
+    ) { }
+    getParent?(element: TypeItem): vscode.ProviderResult<TypeItem> {
+        return null;
+    }
+    getTreeItem(element: TypeItem): vscode.TreeItem {
+        return element;
     }
 
-    const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item : rootItem }) as TypeHierarchyItem[] | null;
+    async getChildren(element?: TypeItem): Promise<TypeItem[]> {
+        if (!element) {
+            return [new TypeItem(this.rootItem, this.isSuper ? 'super' : 'sub')];
+        }
+
+        const method = this.isSuper ? 'typeHierarchy/supertypes' : 'typeHierarchy/subtypes';
+
+        const children = await languageClient.sendRequest(method, { item: element.item });
+        return (children || []).map((item: any) => new TypeItem(item, this.isSuper ? 'super' : 'sub'));
+    }
+}
+function showHierarchyView(
+    title: string,
+    rootItem: any,
+    expandCmd: string,
+    viewId: string,
+    isSuper: boolean
+) {
+    const treeDataProvider = new UnifiedTypeHierarchyProvider(rootItem);
+    const view = vscode.window.createTreeView(viewId, {
+        treeDataProvider,
+        showCollapseAll: true
+    });
+
+    vscode.commands.executeCommand('setContext', `${viewId}`, true);
+
+    const button = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+    button.text = `Expand All ${title}`;
+    button.command = expandCmd;
+    button.show();
+}
+async function buildTextHierarchy(item: TypeHierarchyItem, indent = 0, seen = new Set<string>()): Promise<string> {
+    const name = item?.name ?? '<unknown>';
+    if (seen.has(name)) return '';
+    seen.add(name);
+
+    const prefix = '  '.repeat(indent) + '- ' + name;
+    let lines = [prefix];
+
+    const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item }) as TypeHierarchyItem[] | null;
+    for (const supertype of supertypes || []) {
+        lines.push(await buildTextHierarchy(supertype, indent + 1, seen));
+    }
+
+    const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item }) as TypeHierarchyItem[] | null;
     for (const subtype of subtypes || []) {
-        const subName = subtype?.name ?? '<unknown>';
-        lines.push(`${rootName} <|-- ${subName}`);
-        lines.push(await buildMermaidDiagram(subtype, seen));
+        lines.push(await buildTextHierarchy(subtype, indent + 1, seen));
     }
 
     return lines.join('\n');
 }
 
-function renderMermaidWebview(mermaidText: string): string {
+async function buildMermaidDiagram(
+    rootItem: TypeHierarchyItem,
+    seen = new Set<string>(),
+    highlightName = rootItem?.name ?? '<unknown>'
+): Promise<string> {
+    const rootName = rootItem?.name ?? '<unknown>';
+    if (!rootItem || seen.has(rootName)) return '';
+    seen.add(rootName);
+
+    const sanitize = (name: string) => name.replace(/[^\w]/g, '_');
+
+    let lines: string[] = [];
+
+    // 노드 선언은 꼭 필요함
+    lines.push(`class ${sanitize(rootName)}`);
+
+    const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item: rootItem }) as TypeHierarchyItem[] | null;
+    for (const supertype of supertypes || []) {
+        const superName = supertype?.name ?? '<unknown>';
+        lines.push(`class ${sanitize(superName)}`);
+        lines.push(`${sanitize(superName)} <|-- ${sanitize(rootName)}`);
+        lines.push(await buildMermaidDiagram(supertype, seen, highlightName));
+    }
+
+    const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item: rootItem }) as TypeHierarchyItem[] | null;
+    for (const subtype of subtypes || []) {
+        const subName = subtype?.name ?? '<unknown>';
+        lines.push(`class ${sanitize(subName)}`);
+        lines.push(`${sanitize(rootName)} <|-- ${sanitize(subName)}`);
+        lines.push(await buildMermaidDiagram(subtype, seen, highlightName));
+    }
+
+    return lines.join('\n');
+}
+
+function renderMermaidWebview(mermaidText: string, highlightName: string): string {
+    const sanitizedId = highlightName.replace(/[^\w]/g, '');
+
     return `
         <html>
+        <head>
+            <style>
+                body {
+                    margin: 0;
+                    padding: 0;
+                }
+            </style>
+        </head>
         <body>
+            <div class="mermaid">
+classDiagram
+${mermaidText}
+            </div>
+
             <script type="module">
                 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
                 mermaid.initialize({ startOnLoad: true });
+
+                setTimeout(() => {
+                    const node = document.querySelector('g#${sanitizedId} rect');
+                    if (node) {
+                        node.setAttribute('fill', 'lightyellow');
+                        node.setAttribute('stroke', 'darkorange');
+                        node.setAttribute('stroke-width', '3');
+                    }
+                }, 500);
             </script>
-            <div class="mermaid">
-                classDiagram\n${mermaidText}
-            </div>
         </body>
         </html>
     `;
 }
 
-export function deactivate() {}
+
+export function deactivate() { }

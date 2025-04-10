@@ -19,6 +19,10 @@
                 {
                     "id": "classHierarchy",
                     "name": "Class Hierarchy"
+                },
+                {
+                    "id": "classHierarchyText",
+                    "name": "Class Hierarchy Text Tree"
                 }
             ]
         },
