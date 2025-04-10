@@ -245,35 +245,33 @@ async function buildMermaidDiagram(
     if (!rootItem || seen.has(rootName)) return '';
     seen.add(rootName);
 
-    const sanitize = (name: string) => name.replace(/[^\w]/g, '_');
+    const sanitize = (name: string) => name.replace(/[^\w]/g, '-');
+    const rootSanitized = rootName;
 
     let lines: string[] = [];
-
-    // 노드 선언은 꼭 필요함
-    lines.push(`class ${sanitize(rootName)}`);
+    lines.push(`class ${rootName}`);
 
     const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item: rootItem }) as TypeHierarchyItem[] | null;
     for (const supertype of supertypes || []) {
         const superName = supertype?.name ?? '<unknown>';
-        lines.push(`class ${sanitize(superName)}`);
-        lines.push(`${sanitize(superName)} <|-- ${sanitize(rootName)}`);
+        const superSanitized = superName;
+        lines.push(`class ${superSanitized}`);
+        lines.push(`${superSanitized} <|-- ${rootSanitized}`);
         lines.push(await buildMermaidDiagram(supertype, seen, highlightName));
     }
 
     const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item: rootItem }) as TypeHierarchyItem[] | null;
     for (const subtype of subtypes || []) {
         const subName = subtype?.name ?? '<unknown>';
-        lines.push(`class ${sanitize(subName)}`);
-        lines.push(`${sanitize(rootName)} <|-- ${sanitize(subName)}`);
+        const subSanitized = sanitize(subName);
+        lines.push(`class ${subSanitized}`);
+        lines.push(`${rootSanitized} <|-- ${subSanitized}`);
         lines.push(await buildMermaidDiagram(subtype, seen, highlightName));
     }
 
     return lines.join('\n');
 }
-
 function renderMermaidWebview(mermaidText: string, highlightName: string): string {
-    const sanitizedId = highlightName.replace(/[^\w]/g, '');
-
     return `
         <html>
         <head>
@@ -292,21 +290,48 @@ ${mermaidText}
 
             <script type="module">
                 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-                mermaid.initialize({ startOnLoad: true });
+                mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
 
                 setTimeout(() => {
-                    const node = document.querySelector('g#${sanitizedId} rect');
-                    if (node) {
-                        node.setAttribute('fill', 'lightyellow');
-                        node.setAttribute('stroke', 'darkorange');
-                        node.setAttribute('stroke-width', '3');
+                    const nodes = document.querySelectorAll('g.node');
+
+                    for (const node of nodes) {
+                        const labels = node.querySelectorAll('span.nodeLabel');
+                        for (const label of labels) {
+                            const text = label.textContent.trim();
+                            console.log('[🔍 검사 중]', text);
+
+                            if (text === '${highlightName}') {
+                                console.log('[✅ 매칭됨]', text);
+
+                                const rect = node.querySelector('rect');
+                                if (rect) {
+                                    // ✅ 스타일 직접 지정
+                                    rect.style.fill = 'lightyellow';
+                                    rect.style.stroke = 'darkorange';
+                                    rect.style.strokeWidth = '3px';
+                                }
+
+                                const lines = node.querySelectorAll('line');
+                                for (const line of lines) {
+                                    line.style.stroke = 'darkorange';
+                                    line.style.strokeWidth = '2px';
+                                }
+
+                                break;
+                            }
+                        }
                     }
                 }, 500);
+
             </script>
         </body>
         </html>
     `;
 }
+
+
+
 
 
 export function deactivate() { }
