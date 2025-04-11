@@ -22,7 +22,7 @@
                 },
                 {
                     "id": "classHierarchyText",
-                    "name": "Class Hierarchy Text Tree"
+                    "name": "Class Hierarchy Tree"
                 }
             ]
         },
@@ -30,6 +30,14 @@
             {
                 "command": "classHierarchy.showHierarchy",
                 "title": "Show Class Hierarchy"
+            },
+            {
+                "command": "classHierarchy.showHierarchySupertypes",
+                "title": "Show Class Hierarchy - Supertypes"
+            },
+            {
+                "command": "classHierarchy.showHierarchySubtypes",
+                "title": "Show Class Hierarchy - Subtypes"
             }
         ]
     },
