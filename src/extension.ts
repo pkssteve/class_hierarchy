@@ -280,10 +280,42 @@ function renderMermaidWebview(mermaidText: string, highlightName: string): strin
                     margin: 0;
                     padding: 0;
                 }
+                .toolbar {
+                    margin-bottom: 1rem;
+                }
+                .download-buttons {
+                    position: absolute;
+                    top: 8px;
+                    right: 12px;
+                    display: flex;
+                    gap: 8px;
+                }
+                .download-buttons button {
+                    padding: 4px 10px;
+                    font-size: 12px;
+                    cursor: pointer;
+                    border: 1px solid #ccc;
+                    background: white;
+                    border-radius: 4px;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                }
+                .download-buttons button:hover {
+                    background: #f0f0f0;
+                }
+                .mermaid {
+                    border: 1px solid #ddd;
+                    padding: 1rem;
+                    border-radius: 8px;
+                    background-color: white;
+                }
             </style>
         </head>
         <body>
-            <div class="mermaid">
+            <div class="download-buttons">
+                    <button onclick="downloadSVG()">SVG</button>
+                    <button onclick="downloadPNG()">PNG</button>
+            </div>
+            <div class="mermaid" id="diagram">
 classDiagram
 ${mermaidText}
             </div>
@@ -323,6 +355,62 @@ ${mermaidText}
                         }
                     }
                 }, 500);
+
+                window.downloadSVG = function () {
+                    const svg = document.querySelector('#diagram svg');
+                    if (!svg) return;
+                    const svgData = new XMLSerializer().serializeToString(svg);
+                    const blob = new Blob([svgData], { type: 'image/svg+xml' });
+                    const url = URL.createObjectURL(blob);
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = generateFilename('svg');
+                    a.click();
+                    URL.revokeObjectURL(url);
+                };
+
+                
+                window.downloadPNG = function () {
+                    const svg = document.querySelector('#diagram svg');
+                    if (!svg) return;
+                    const svgData = new XMLSerializer().serializeToString(svg);
+                    console.log(svgData)
+                    const canvas = document.createElement('canvas');
+                    const svgSize = svg.getBoundingClientRect();
+                    canvas.width = svgSize.width;
+                    canvas.height = svgSize.height;
+
+                    const ctx = canvas.getContext('2d');
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+
+                    const encodedData = encodeURIComponent(svgData);
+                    const url = 'data:image/svg+xml;charset=utf-8,' + encodedData;
+                    img.src = url;
+                    console.log(url)
+
+                    img.onload = function () {
+                        ctx.drawImage(img, 0, 0);
+                        URL.revokeObjectURL(url);
+
+                        const pngUrl = canvas.toDataURL('image/png');
+                        const a = document.createElement('a');
+                        a.href = pngUrl;
+                        a.download = generateFilename('png');
+                        a.click();
+                    };
+
+                    img.src = url;
+                };
+
+                // 파일명 생성기: class-diagram_ClassName_YYYY-MM-DD.ext
+                function generateFilename(ext) {
+                    const today = new Date();
+                    const dateStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
+                    const className = '${highlightName}'.replace(/[\\/:*?"<>|\\s]/g, '_'); // 안전한 파일명
+                    return \`class-diagram_\${className}_\${dateStr}.\${ext}\`;
+                }
 
             </script>
         </body>
