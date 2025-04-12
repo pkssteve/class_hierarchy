@@ -2,6 +2,7 @@
 import * as vscode from 'vscode';
 import type { ClangdExtension } from '@clangd/vscode-clangd';
 import * as vscodelc from 'vscode-languageclient/node';
+import path = require('path');
 
 const CLANGD_EXTENSION = 'llvm-vs-code-extensions.vscode-clangd';
 const CLANGD_API_VERSION = 1;
@@ -55,11 +56,55 @@ export async function activate(context: vscode.ExtensionContext) {
             genHierarchy(context, "sub");
         })
     );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('classHierarchy.showSequenceDiagram', async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || !languageClient) return;
+
+            const position = editor.selection.active;
+            const doc = editor.document;
+            const uri = doc.uri;
+
+            if (!languageClient?.initializeResult?.capabilities?.callHierarchyProvider) {
+                vscode.window.showWarningMessage("LSP server does not support 'textDocument/prepareCallHierarchy'");
+                return;
+            }
+
+            if (!languageClient?.initializeResult?.capabilities?.implementationProvider) {
+                vscode.window.showWarningMessage("LSP server does not support 'textDocument/implementation'");
+                return;
+            }
+            
+
+            const symbols: vscode.DocumentSymbol[] = await vscode.commands.executeCommand(
+                'vscode.executeDocumentSymbolProvider', uri
+            );
+
+            const funcSymbol = findFunctionSymbolAtPosition(symbols, position);
+            if (!funcSymbol) return vscode.window.showErrorMessage('No function found at cursor');
+
+            const rootName = getQualifiedName(funcSymbol, symbols, uri);
+            const visited = new Set<string>();
+            const docText = doc.getText();
+            const callTree = await traceCallsWithLSPViaClient(doc, docText, funcSymbol.range, rootName, 0, 5, visited);
+
+            const mermaidCode = generateMermaidSequence(callTree);
+            showMermaidWebview(mermaidCode);
+        })
+      );
 }
+5
+
+export type TypeRole = 'super' | 'sub' | 'root';
 async function genHierarchy(context: vscode.ExtensionContext, targetType: string) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         vscode.window.showErrorMessage('No active editor found');
+        return;
+    }
+    if (!languageClient?.initializeResult?.capabilities?.typeHierarchyProvider) {
+        vscode.window.showWarningMessage("LSP server does not support 'textDocument/typeHierarchy'");
         return;
     }
 
@@ -67,6 +112,7 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     const position = editor.selection.active;
     const params = { textDocument, position, resolve: 5, direction: 2 };
 
+    // 직계 관계
     const item: TypeHierarchyItem = await languageClient.sendRequest('textDocument/typeHierarchy', params);
 
     if (!item) {
@@ -81,26 +127,27 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     if (targetType == 'all') {
         rootItem = findRoot(rootItem);
         isSuper = false;
-        
     } else if (targetType == 'super') {
         isSuper = true;
     } else if (targetType == 'sub') {
         isSuper = false;
     }
 
-    const treeDataProvider = new TypeHierarchyProvider(rootItem, isSuper);
+    const treeDataProvider = new TypeHierarchyProvider(rootItem, targetType);
     const treeView = vscode.window.createTreeView('classHierarchy', {
         treeDataProvider
     });
 
-    const children = await treeDataProvider.getChildren();
-    children[0].item.children
+    
+    let children = await treeDataProvider.getChildren();
+    
     if (targetType == 'super') {
         children[0].item.children = undefined;
     } else if (targetType == 'sub') {
         children[0].item.parents = undefined;
     }
-    const rootNode = children.find(item => item.item.name === rootItem.name);
+
+    let rootNode = children.find(items => items.item.name === rootItem.name);
     if (rootNode) {
         treeView.reveal(rootNode, { expand: true, focus: true, select: true });
     }
@@ -118,14 +165,16 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
         globalThis.umlPanel.reveal(vscode.ViewColumn.Beside);
     }
 
-    const mermaidText = await buildMermaidDiagram(rootItem, new Set(), highlightName);
+    const mermaidText = await buildMermaidDiagram(rootItem, targetType, new Set(), highlightName);
     globalThis.umlPanel.webview.html = renderMermaidWebview(mermaidText, highlightName);
 }
+
+
 
 class TypeItem extends vscode.TreeItem {
     constructor(
         public item: TypeHierarchyItem,
-        private role: 'super' | 'sub' | 'root'
+        private role: TypeRole
     ) {
         const name = item?.name ?? '<unknown>';
         super(name, vscode.TreeItemCollapsibleState.Expanded);
@@ -133,28 +182,28 @@ class TypeItem extends vscode.TreeItem {
         this.tooltip = `${roleLabel(role)}: ${name}`;
 
         const iconMap = {
-            root: 'symbol-class.svg',
-            super: 'arrow-up.svg',
-            sub: 'arrow-down.svg'
+            root: 'symbol-class',
+            super: 'arrow-up',
+            sub: 'arrow-down'
         };
         this.iconPath = new vscode.ThemeIcon(iconMap[role] || 'symbol-class');
+
         if (item?.uri && item?.range) {
             this.command = {
                 command: 'vscode.open',
                 title: 'Go to Definition',
                 arguments: [
                     vscode.Uri.parse(item.uri),
-                    {
-                        selection: new vscode.Range(
-                            new vscode.Position(item.range.start.line, item.range.start.character),
-                            new vscode.Position(item.range.end.line, item.range.end.character)
-                        )
-                    }
+                    new vscode.Range(
+                        new vscode.Position(item.range.start.line, item.range.start.character),
+                        new vscode.Position(item.range.end.line, item.range.end.character)
+                    )
                 ]
             };
         }
     }
 }
+
 
 function roleLabel(role: string): string {
     switch (role) {
@@ -166,43 +215,88 @@ function roleLabel(role: string): string {
 }
 class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
     constructor(
-        private rootItem: any,
-        private isSuper: boolean
-    ) { }
+        private rootItem: TypeHierarchyItem,
+        private mode: string,
+    ) {}
+
     getParent?(element: TypeItem): vscode.ProviderResult<TypeItem> {
         return null;
     }
+
     getTreeItem(element: TypeItem): vscode.TreeItem {
         return element;
     }
 
     async getChildren(element?: TypeItem): Promise<TypeItem[]> {
         if (!element) {
-            return [new TypeItem(this.rootItem, this.isSuper ? 'super' : 'sub')];
+            return [new TypeItem(this.rootItem, 'root')];
         }
-        const treeItems = this.isSuper ? this.getSupertypes(element) : this.getSubtypes(element);
-        return treeItems;   
+
+        if (this.mode === 'super') {
+            return this.getSupertypes(element);
+        }
+
+        return this.getSubtypes(element);
     }
 
     private async getSupertypes(element: TypeItem): Promise<TypeItem[]> {
-        const supertypes = await languageClient.sendRequest(
-            'typeHierarchy/supertypes',
-            { item: element.item }
-        );
+        const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', {
+            item: element.item
+        });
         return (supertypes || []).map((item: any) => new TypeItem(item, 'super'));
     }
 
     private async getSubtypes(element: TypeItem): Promise<TypeItem[]> {
-        const subtypes = await languageClient.sendRequest(
-            'typeHierarchy/subtypes',
-            { item: element.item }
-        );
+        const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', {
+            item: element.item
+        });
         return (subtypes || []).map((item: any) => new TypeItem(item, 'sub'));
+    }
+    private async findTopmostSupertype(item: TypeHierarchyItem): Promise<TypeHierarchyItem> {
+        const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', {
+            item
+        }) as TypeHierarchyItem[];
+
+        if (supertypes && supertypes.length > 0) {
+            return this.findTopmostSupertype(supertypes[0]);
+        }
+
+        return item;
+    }
+    // Get all subtypes of all supertypes of the selected class as TypeItem[]
+    public async getSubtypesOfAllSupertypes(): Promise<TypeItem[]> {
+        const collected: TypeHierarchyItem[] = [];
+        const visited = new Set<string>();
+
+        // Helper to collect all supertypes recursively
+        const collectSupertypes = async (item: TypeHierarchyItem) => {
+            const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item }) as TypeHierarchyItem[];
+            for (const supertype of supertypes || []) {
+                if (!visited.has(supertype.name)) {
+                    visited.add(supertype.name);
+                    collected.push(supertype);
+                    await collectSupertypes(supertype);
+                }
+            }
+        };
+
+        // Start from the root item
+        await collectSupertypes(this.rootItem);
+
+        // Collect all subtypes of each supertype and wrap in TypeItem
+        const allSubtypeItems: TypeItem[] = [];
+        for (const supertype of collected) {
+            const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item: supertype }) as TypeHierarchyItem[];
+            allSubtypeItems.push(...(subtypes || []).map((item: any) => new TypeItem(item, 'sub')));
+        }
+
+        return allSubtypeItems;
     }
 }
 
 async function buildMermaidDiagram(
     rootItem: TypeHierarchyItem,
+    targetType: string,
     seen = new Set<string>(),
     highlightName = rootItem?.name ?? '<unknown>'
 ): Promise<string> {
@@ -216,23 +310,28 @@ async function buildMermaidDiagram(
     let lines: string[] = [];
     lines.push(`class ${rootName}`);
 
-    const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item: rootItem }) as TypeHierarchyItem[] | null;
-    for (const supertype of rootItem.parents || []) {
-        const superName = supertype?.name ?? '<unknown>';
-        const superSanitized = superName;
-        lines.push(`class ${superSanitized}`);
-        lines.push(`${superSanitized} <|-- ${rootSanitized}`);
-        lines.push(await buildMermaidDiagram(supertype, seen, highlightName));
+    if(targetType == 'all' || targetType == 'super') {
+        const supertypes = await languageClient.sendRequest('typeHierarchy/supertypes', { item: rootItem }) as TypeHierarchyItem[] | null;
+        for (const supertype of supertypes || []) {
+            const superName = supertype?.name ?? '<unknown>';
+            const superSanitized = superName;
+            lines.push(`class ${superSanitized}`);
+            lines.push(`${superSanitized} <|-- ${rootSanitized}`);
+            lines.push(await buildMermaidDiagram(supertype, targetType, seen, highlightName));
+        }
     }
-
-    const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item: rootItem }) as TypeHierarchyItem[] | null;
-    for (const subtype of rootItem.children || []) {
-        const subName = subtype?.name ?? '<unknown>';
-        const subSanitized = sanitize(subName);
-        lines.push(`class ${subSanitized}`);
-        lines.push(`${rootSanitized} <|-- ${subSanitized}`);
-        lines.push(await buildMermaidDiagram(subtype, seen, highlightName));
+    
+    if(targetType == 'all' || targetType == 'sub') {
+        const subtypes = await languageClient.sendRequest('typeHierarchy/subtypes', { item: rootItem }) as TypeHierarchyItem[] | null;
+        for (const subtype of subtypes || []) {
+            const subName = subtype?.name ?? '<unknown>';
+            const subSanitized = sanitize(subName);
+            lines.push(`class ${subSanitized}`);
+            lines.push(`${rootSanitized} <|-- ${subSanitized}`);
+            lines.push(await buildMermaidDiagram(subtype, targetType, seen, highlightName));
+        }
     }
+    
 
     return lines.join('\n');
 }
@@ -382,9 +481,218 @@ ${mermaidText}
         </html>
     `;
 }
+interface CallNode {
+    name: string;
+    children: CallNode[];
+  }
+  
+  function findFunctionSymbolAtPosition(symbols: vscode.DocumentSymbol[], position: vscode.Position): vscode.DocumentSymbol | null {
+    for (const symbol of symbols) {
+      if (symbol.range.contains(position)) {
+        if (symbol.kind === vscode.SymbolKind.Function || symbol.kind === vscode.SymbolKind.Method) {
+          return symbol;
+        } else if (symbol.children) {
+          const found = findFunctionSymbolAtPosition(symbol.children, position);
+          if (found) return found;
+        }
+      }
+    }
+    return null;
+  }
+  
+  async function traceCallsWithLSPViaClient(
+    doc: vscode.TextDocument,
+    docText: string,
+    range: vscode.Range,
+    callerName: string,
+    depth: number,
+    maxDepth: number,
+    visited: Set<string>
+  ): Promise<CallNode> {
+    if (depth >= maxDepth || visited.has(callerName)) {
+      return { name: callerName, children: [] };
+    }
+    visited.add(callerName);
+  
+    const children: CallNode[] = [];
+    const rangeText = doc.getText(range);
+    const matches = Array.from(rangeText.matchAll(/(\w+)\.(\w+)\s*\(|(?<!\.)\b(\w+)\s*\(/g));
+    const seen = new Set<string>();
+  
+    for (const match of matches) {
+      const callee = match[2] || match[3];
+      if (!callee || seen.has(callee)) continue;
+      seen.add(callee);
+  
+      const index = rangeText.indexOf(callee);
+      if (index === -1) continue;
+  
+      const fullStart = doc.offsetAt(range.start) + index;
+      const pos = doc.positionAt(fullStart);
 
+      
+  
+      const impls = await languageClient.sendRequest('textDocument/implementation', {
+        textDocument: { uri: doc.uri.toString() },
+        position: { line: pos.line, character: pos.character },
+        workDoneToken: undefined,
+        partialResultToken: undefined
+      });
+  
+      const locations: vscode.Location[] = [];
+  
+      if (Array.isArray(impls)) {
+        for (const loc of impls) {
+          if ('targetUri' in loc) {
+            locations.push(new vscode.Location(
+              vscode.Uri.parse(loc.targetUri),
+              new vscode.Range(
+                new vscode.Position(loc.targetSelectionRange.start.line, loc.targetSelectionRange.start.character),
+                new vscode.Position(loc.targetSelectionRange.end.line, loc.targetSelectionRange.end.character)
+              )
+            ));
+          } else {
+            locations.push(loc);
+          }
+        }
+      } else if (impls) {
+        if ('targetUri' in impls) {
+          locations.push(new vscode.Location(
+            vscode.Uri.parse(impls.targetUri),
+            new vscode.Range(
+              new vscode.Position(impls.targetSelectionRange.start.line, impls.targetSelectionRange.start.character),
+              new vscode.Position(impls.targetSelectionRange.end.line, impls.targetSelectionRange.end.character)
+            )
+          ));
+        } else {
+          locations.push(impls);
+        }
+      }
+  
+      if (locations.length === 0) continue;
+  
+      for (const loc of locations) {
+        const targetDoc = await vscode.workspace.openTextDocument(loc.uri);
+        const targetText = targetDoc.getText();
+        const targetSymbols: vscode.DocumentSymbol[] = await vscode.commands.executeCommand(
+          'vscode.executeDocumentSymbolProvider', targetDoc.uri
+        );
+  
+        const symbol = findEnclosingSymbol(targetSymbols, new vscode.Range(
+          new vscode.Position(loc.range.start.line, loc.range.start.character),
+          new vscode.Position(loc.range.end.line, loc.range.end.character)
+        ));
+        if (!symbol) continue;
+  
+        const calleeName = getQualifiedName(symbol, targetSymbols, targetDoc.uri);
+        const subTree = await traceCallsWithLSPViaClient(targetDoc, targetText, symbol.range, calleeName, depth + 1, maxDepth, visited);
+        children.push(subTree);
+        break;
+      }
+    }
+  
+    return { name: callerName, children };
+  }
+  
+  function findEnclosingSymbol(symbols: vscode.DocumentSymbol[], range: vscode.Range): vscode.DocumentSymbol | null {
+    for (const symbol of symbols) {
+      if (symbol.range.contains(range)) {
+        if (symbol.kind === vscode.SymbolKind.Function || symbol.kind === vscode.SymbolKind.Method) {
+          return symbol;
+        } else if (symbol.children) {
+          const found = findEnclosingSymbol(symbol.children, range);
+          if (found) return found;
+        }
+      }
+    }
+    return null;
+  }
+  
+  function getQualifiedName(symbol: vscode.DocumentSymbol, allSymbols: vscode.DocumentSymbol[], uri: vscode.Uri): string {
+    const scope = findParentScopeName(symbol, allSymbols);
+    const container = scope || path.basename(uri.fsPath).replace(/\..*$/, '');
+    return `${container}::${symbol.name}`;
+  }
+  
+  function findParentScopeName(symbol: vscode.DocumentSymbol, allSymbols: vscode.DocumentSymbol[]): string | undefined {
+    let result: string | undefined = undefined;
+  
+    function findParent(symbols: vscode.DocumentSymbol[], child: vscode.DocumentSymbol): boolean {
+      for (const symbol of symbols) {
+        if (symbol.children?.includes(child)) {
+          if (
+            symbol.kind === vscode.SymbolKind.Class ||
+            symbol.kind === vscode.SymbolKind.Struct ||
+            symbol.kind === vscode.SymbolKind.Namespace
+          ) {
+            result = symbol.name;
+            return true;
+          } else {
+            return findParent(symbol.children || [], child);
+          }
+        } else if (symbol.children && findParent(symbol.children, child)) {
+          return true;
+        }
+      }
+      return false;
+    }
+  
+    findParent(allSymbols, symbol);
+    return result;
+  }
 
-
-
-
+  function generateMermaidSequence(root: CallNode): string {
+    const lines: string[] = ['sequenceDiagram'];
+    const participants = new Set<string>();
+    const edges: [string, string][] = [];
+    const seenEdges = new Set<string>();
+  
+    function dfs(node: CallNode) {
+      participants.add(node.name);
+      for (const child of node.children) {
+        const edgeKey = `${node.name}->>${child.name}`;
+        if (!seenEdges.has(edgeKey)) {
+          edges.push([node.name, child.name]);
+          seenEdges.add(edgeKey);
+        }
+        dfs(child);
+      }
+    }
+  
+    dfs(root);
+  
+    for (const name of participants) {
+      lines.push(`    participant ${name}`);
+    }
+    for (const [from, to] of edges) {
+      lines.push(`    ${from}->>${to}: call`);
+    }
+    return lines.join('\n');
+  }
+  
+  function showMermaidWebview(mermaidCode: string) {
+    const panel = vscode.window.createWebviewPanel(
+      'sequenceDiagram',
+      'C++ Call Sequence Diagram',
+      vscode.ViewColumn.Beside,
+      { enableScripts: true }
+    );
+  
+    panel.webview.html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <script type="module">
+          import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+          mermaid.initialize({ startOnLoad: true });
+        </script>
+      </head>
+      <body>
+        <div class="mermaid">
+          ${mermaidCode}
+        </div>
+      </body>
+      </html>
+    `;
+  }
 export function deactivate() { }

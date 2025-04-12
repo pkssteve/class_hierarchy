@@ -38,6 +38,10 @@
             {
                 "command": "classHierarchy.showHierarchySubtypes",
                 "title": "Show Class Hierarchy - Subtypes"
+            },
+            {
+                "command": "classHierarchy.showSequenceDiagram",
+                "title": "Show Sequence Diagram"
             }
         ]
     },
