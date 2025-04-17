@@ -137,22 +137,22 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     }
 
     const treeDataProvider = new TypeHierarchyProvider(rootItem, targetType);
-    const refreshAndReveal = async () => {
-        const match = children.find(child => child.item.name === item.name);
-        if (match) {
-            await treeView.reveal(match, { expand: true, select: true });
-        }
-    };
+    // const refreshAndReveal = async () => {
+    //     const match = children.find(child => child.item.name === item.name);
+    //     if (match) {
+    //         await treeView.reveal(match, { expand: true, select: true });
+    //     }
+    // };
     
     let children = await treeDataProvider.getChildren();
     const treeView = vscode.window.createTreeView('classHierarchy', {
         treeDataProvider
     });
-    treeView.onDidChangeVisibility((e) => {
-      if (e.visible) {
-          refreshAndReveal();
-      }
-    });
+    // treeView.onDidChangeVisibility((e) => {
+    //   if (e.visible) {
+    //       refreshAndReveal();
+    //   }
+    // });
 
     
     
@@ -161,10 +161,10 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     } else if (targetType == 'sub') {
         children[0].item.parents = undefined;
     }
-    // let rootNode = children.find(items => items.item.name === rootItem.name);
-    // if (rootNode) {
-    //     treeView.reveal(rootNode, { expand: true, focus: true, select: true });
-    // }
+    let rootNode = children.find(items => items.item.name === rootItem.name);
+    if (rootNode) {
+        treeView.reveal(rootNode, { expand: true, focus: true, select: true });
+    }
     // Reveal the root item as selected and expanded in the tree view
     // const rootTreeItem = new TypeItem(item, 'root');
     // treeView.reveal(rootTreeItem, { expand: true, select: true });

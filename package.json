@@ -1,17 +1,23 @@
 {
-    "name": "type-hierarchy-extension",
-    "displayName": "Type Hierarchy Extension",
-    "description": "Enhanced Type Hierarchy viewer for C++ using VS Code's language features",
-    "version": "1.0.0",
+    "name": "cpp-type-hierarchy-extension",
+    "displayName": "C++ class hierarchy explorer",
+    "description": "Show base and derived classes in the diagram. The underlying functionality for getting class hierarchy depends on the clangd extension.",
+    "version": "0.6.0",
     "engines": {
         "vscode": "^1.80.0"
     },
     "categories": [
-        "Other"
+        "Visualization"
     ],
     "activationEvents": [
         "onLanguage:cpp"
     ],
+    "publisher": "Steve Park",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/pkssteve/vscode-classGraph.git"
+    },
+    "license": "MIT",
     "main": "./dist/extension.js",
     "contributes": {
         "views": {
@@ -19,10 +25,6 @@
                 {
                     "id": "classHierarchy",
                     "name": "Class Hierarchy"
-                },
-                {
-                    "id": "classHierarchyText",
-                    "name": "Class Hierarchy Tree"
                 }
             ]
         },
@@ -38,10 +40,6 @@
             {
                 "command": "classHierarchy.showHierarchySubtypes",
                 "title": "Show Class Hierarchy - Subtypes"
-            },
-            {
-                "command": "classHierarchy.showSequenceDiagram",
-                "title": "Show Sequence Diagram"
             }
         ]
     },
