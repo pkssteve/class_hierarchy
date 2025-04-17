@@ -40,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         languageClient = api.languageClient;
     }
+    languageClient.start();
 
     context.subscriptions.push(
         vscode.commands.registerCommand('classHierarchy.showHierarchy', async () => {
@@ -95,7 +96,9 @@ export async function activate(context: vscode.ExtensionContext) {
       );
 }
 5
-
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 export type TypeRole = 'super' | 'sub' | 'root';
 async function genHierarchy(context: vscode.ExtensionContext, targetType: string) {
     const editor = vscode.window.activeTextEditor;
@@ -134,23 +137,37 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     }
 
     const treeDataProvider = new TypeHierarchyProvider(rootItem, targetType);
+    const refreshAndReveal = async () => {
+        const match = children.find(child => child.item.name === item.name);
+        if (match) {
+            await treeView.reveal(match, { expand: true, select: true });
+        }
+    };
+    
+    let children = await treeDataProvider.getChildren();
     const treeView = vscode.window.createTreeView('classHierarchy', {
         treeDataProvider
     });
+    treeView.onDidChangeVisibility((e) => {
+      if (e.visible) {
+          refreshAndReveal();
+      }
+    });
 
     
-    let children = await treeDataProvider.getChildren();
     
     if (targetType == 'super') {
         children[0].item.children = undefined;
     } else if (targetType == 'sub') {
         children[0].item.parents = undefined;
     }
-
-    let rootNode = children.find(items => items.item.name === rootItem.name);
-    if (rootNode) {
-        treeView.reveal(rootNode, { expand: true, focus: true, select: true });
-    }
+    // let rootNode = children.find(items => items.item.name === rootItem.name);
+    // if (rootNode) {
+    //     treeView.reveal(rootNode, { expand: true, focus: true, select: true });
+    // }
+    // Reveal the root item as selected and expanded in the tree view
+    // const rootTreeItem = new TypeItem(item, 'root');
+    // treeView.reveal(rootTreeItem, { expand: true, select: true });
     if (!globalThis.umlPanel) {
         globalThis.umlPanel = vscode.window.createWebviewPanel(
             'umlDiagram',
@@ -164,9 +181,15 @@ async function genHierarchy(context: vscode.ExtensionContext, targetType: string
     } else {
         globalThis.umlPanel.reveal(vscode.ViewColumn.Beside);
     }
-
+    
     const mermaidText = await buildMermaidDiagram(rootItem, targetType, new Set(), highlightName);
     globalThis.umlPanel.webview.html = renderMermaidWebview(mermaidText, highlightName);
+
+    // Reveal current class after tree view is visible
+
+    
+
+    
 }
 
 
@@ -214,6 +237,8 @@ function roleLabel(role: string): string {
     }
 }
 class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
+    private _onDidChangeTreeData: vscode.EventEmitter<TypeItem | undefined | void> = new vscode.EventEmitter<TypeItem | undefined | void>();
+    readonly onDidChangeTreeData: vscode.Event<TypeItem | undefined | void> = this._onDidChangeTreeData.event;
     constructor(
         private rootItem: TypeHierarchyItem,
         private mode: string,
@@ -235,7 +260,6 @@ class TypeHierarchyProvider implements vscode.TreeDataProvider<TypeItem> {
         if (this.mode === 'super') {
             return this.getSupertypes(element);
         }
-
         return this.getSubtypes(element);
     }
 
@@ -531,7 +555,7 @@ interface CallNode {
       const pos = doc.positionAt(fullStart);
 
       
-  
+      console.log('requesting implementation at', pos.line, pos.character);
       const impls = await languageClient.sendRequest('textDocument/implementation', {
         textDocument: { uri: doc.uri.toString() },
         position: { line: pos.line, character: pos.character },
