@@ -1,6 +1,6 @@
 {
-    "name": "cpp-type-hierarchy-extension",
-    "displayName": "C++ class hierarchy explorer",
+    "name": "cpp-class-insight",
+    "displayName": "C++ Class Insight",
     "description": "Show base and derived classes in the diagram. The underlying functionality for getting class hierarchy depends on the clangd extension.",
     "version": "0.6.0",
     "engines": {
@@ -12,11 +12,12 @@
     "activationEvents": [
         "onLanguage:cpp"
     ],
-    "publisher": "Steve Park",
+    "publisher": "appleberry115",
     "repository": {
         "type": "git",
         "url": "https://github.com/pkssteve/vscode-classGraph.git"
     },
+    "icon": "project_icon.png",
     "license": "MIT",
     "main": "./dist/extension.js",
     "contributes": {
