@@ -1,14 +1,19 @@
 # C++ Class Insight
 
-This tool visualizes the hierarchy of C++ classes in your project. It generates three types of class hierarchy diagrams:
+This tool visualizes the hierarchy of C++ classes in your project, displaying both class hierarchy diagrams and a tree view of the class structures. 
+It generates three types of views:
 
 - Overall Class Hierarchy
-- Base Class Hierarchy
-- Derived Class Hierarchy
+- Base Class Hierarchy (Supertypes)
+- Derived Class Hierarchy (Subtypes)
+
+<!-- ![class_diagram_example](doc/img/class_diagram_example.png "class diagram example") -->
+<img src="doc/img/class_diagram_example.png" alt="class diagram example" width="600" />
 
 ## Prerequisites
 
 - `clangd` (C++ language server)
+- compile your C++ project using `clang` (can be easily done via the `CMake Tools` extension in VS Code)
 
 ## Usage
 
@@ -18,9 +23,11 @@ This tool visualizes the hierarchy of C++ classes in your project. It generates 
    - **Show Class Hierarchy**: Displays the entire class hierarchy.
    - **Show Class Hierarchy - Supertypes**: Displays the base class hierarchy (supertypes).
    - **Show Class Hierarchy - Subtypes**: Displays the derived class hierarchy (subtypes).
+   
+   *(We recommend setting custom keyboard shortcuts for quicker access.)*
 
 ## How it works
 
-This tool uses `clangd` (derived from vscode language server model) and the Mermaid diagram generator to create class hierarchy diagrams.
+This tool leverages `clangd` (C++ language server) and the Mermaid diagram generator to create class hierarchy diagrams.
 
-Enjoy visualizing your C++ class hierarchies!
+Enjoy visualizing your C++ class hierarchies with ease!
