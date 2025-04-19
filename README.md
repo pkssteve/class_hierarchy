@@ -9,6 +9,7 @@ It generates three types of views:
 
 <!-- ![class_diagram_example](doc/img/class_diagram_example.png "class diagram example") -->
 <img src="doc/img/class_diagram_example.png" alt="class diagram example" width="600" />
+<img src="doc/img/tree_view_example.png" alt="tree view example" width="300" />
 
 ## Prerequisites
 
