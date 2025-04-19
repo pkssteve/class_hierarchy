@@ -41,7 +41,7 @@ export async function activate(context: vscode.ExtensionContext) {
         languageClient = api.languageClient;
     } else {
         vscode.window.showWarningMessage(
-          "This extension depends on the 'clangd' extension. Some features may not work if it is not installed.",
+          "This extension depends on the 'clangd' extension. Some features may not work if it is not installed. Please install clangd extension and compile your project with clangd before you use this extension.",
           "Install clangd"
         ).then(selection => {
           if (selection === "Install clangd") {

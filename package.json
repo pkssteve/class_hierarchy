@@ -2,7 +2,7 @@
     "name": "cpp-class-insight",
     "displayName": "C++ Class Insight",
     "description": "Show base and derived classes in the diagram. The underlying functionality for getting class hierarchy depends on the clangd extension.",
-    "version": "0.6.7",
+    "version": "0.6.8",
     "engines": {
         "vscode": "^1.80.0"
     },
