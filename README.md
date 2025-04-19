@@ -15,6 +15,7 @@ It generates three types of views:
 
 - `clangd` (C++ language server)
 - compiling your C++ project using `clang` (can be easily done via the `CMake Tools` extension in VS Code)
+  (Recommend adding *.idx to .gitignore after compiling with clang)
 
 ## Usage
 
