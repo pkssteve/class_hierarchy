@@ -39,6 +39,15 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
         languageClient = api.languageClient;
+    } else {
+        vscode.window.showWarningMessage(
+          "This extension depends on the 'clangd' extension. Some features may not work if it is not installed.",
+          "Install clangd"
+        ).then(selection => {
+          if (selection === "Install clangd") {
+            vscode.commands.executeCommand('extension.open', 'llvm-vs-code-extensions.vscode-clangd');
+          }
+        });
     }
     languageClient.start();
 

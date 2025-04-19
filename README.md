@@ -14,7 +14,7 @@ It generates three types of views:
 ## Prerequisites
 
 - `clangd` (C++ language server)
-- compile your C++ project using `clang` (can be easily done via the `CMake Tools` extension in VS Code)
+- compiling your C++ project using `clang` (can be easily done via the `CMake Tools` extension in VS Code)
 
 ## Usage
 
